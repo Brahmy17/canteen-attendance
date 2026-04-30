@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // CONFIGURATION
 // ========================================================
 // Paste your Google Apps Script Web App URL below:
-$google_apps_script_url = "https://script.google.com/macros/s/AKfycbzgiH5ijbUYrLsYYO952dRUDPPdgBE2rVcg8ukQ7OdiYzKkA_uTP28Q0TVSGdLWndrO_g/exec";
+$google_apps_script_url = "https://script.google.com/macros/s/AKfycbyVDo8_JxFKB40xxy6LKITod4gV80Dmp1B-QsQOcInVWQw7LjnNC73Jd9YmJo4W6xiLRw/exec";
 
 // Optional MySQL Configuration (Uncomment to enable local database backups)
 /*
