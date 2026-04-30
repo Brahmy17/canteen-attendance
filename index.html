@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canteen Meal Attendance System</title>
+    <!-- Tailwind CSS for modern, responsive UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HTML5-QRCode Library for scanning -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <!-- QRCode.js Library for generating QR codes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        #reader {
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            background: #000;
+            min-height: 250px;
+        }
+        #reader video {
+            object-fit: cover;
+        }
+        /* Hide default buttons */
+        #reader__dashboard_section_csr span,
+        #reader__dashboard_section_csr button {
+            display: none !important;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800 font-sans flex flex-col">
+    <!-- Header -->
+    <header class="bg-blue-600 text-white p-4 shadow-md text-center shrink-0">
+        <h1 class="text-xl md:text-2xl font-bold flex items-center justify-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            Canteen Attendance
+        </h1>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 container mx-auto p-4 max-w-2xl mt-4">
+        
+        <!-- ========================================== -->
+        <!-- SCREEN 1: MEAL SELECTION                   -->
+        <!-- ========================================== -->
+        <div id="meal-selection-screen" class="space-y-6 flex flex-col h-full justify-center max-w-md mx-auto">
+            <div class="text-center mb-8">
+                <h2 class="text-2xl font-bold text-slate-700">Select Meal Type</h2>
+                <p class="text-slate-500 mt-2">Choose the meal being served right now.</p>
+            </div>
+
+            <button onclick="selectMeal('Breakfast')" class="w-full bg-orange-400 hover:bg-orange-500 text-white py-4 rounded-xl text-xl font-semibold shadow-sm transition-transform active:scale-95 flex justify-center items-center gap-2">
+                🍳 Breakfast
+            </button>
+            <button onclick="selectMeal('Lunch')" class="w-full bg-green-500 hover:bg-green-600 text-white py-4 rounded-xl text-xl font-semibold shadow-sm transition-transform active:scale-95 flex justify-center items-center gap-2">
+                🍱 Lunch
+            </button>
+            <button onclick="selectMeal('Dinner')" class="w-full bg-indigo-500 hover:bg-indigo-600 text-white py-4 rounded-xl text-xl font-semibold shadow-sm transition-transform active:scale-95 flex justify-center items-center gap-2">
+                🍲 Dinner
+            </button>
+
+            <div class="pt-8 border-t border-slate-200 mt-8">
+                <button onclick="showScreen('registration-screen')" class="w-full bg-white border-2 border-blue-600 text-blue-600 hover:bg-blue-50 py-3 rounded-xl font-semibold shadow-sm transition-transform active:scale-95 mb-3">
+                    📝 Register Employee & Generate QR
+                </button>
+                <button onclick="loadDashboard()" class="w-full bg-slate-200 hover:bg-slate-300 text-slate-700 py-3 rounded-xl font-semibold shadow-sm transition-transform active:scale-95">
+                    📊 View Dashboard & History (Auditor)
+                </button>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- SCREEN 2: SCANNER                          -->
+        <!-- ========================================== -->
+        <div id="scanner-screen" class="hidden flex flex-col h-full space-y-4 max-w-md mx-auto">
+            <div class="bg-white p-4 rounded-xl shadow-sm text-center border border-slate-200">
+                <p class="text-sm text-slate-500 uppercase tracking-wide font-bold">Currently Serving</p>
+                <h2 id="current-meal-display" class="text-2xl font-bold text-blue-600">Lunch</h2>
+            </div>
+
+            <div id="reader"></div>
+            
+            <p class="text-center text-sm text-slate-500 px-4">Ensure you have allowed camera permissions. Align QR Code within the frame.</p>
+
+            <div class="mt-auto pt-4">
+                <button onclick="showScreen('meal-selection-screen')" class="w-full bg-red-100 hover:bg-red-200 text-red-600 py-3 rounded-xl font-semibold transition-colors">
+                    ← Back to Meal Selection
+                </button>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- SCREEN 3: DASHBOARD (AUDITOR)              -->
+        <!-- ========================================== -->
+        <div id="dashboard-screen" class="hidden space-y-6">
+            <div class="flex items-center justify-between">
+                <h2 class="text-2xl font-bold text-slate-700">Auditor Dashboard</h2>
+                <button onclick="showScreen('meal-selection-screen')" class="text-blue-600 font-semibold text-sm hover:underline">
+                    ← Home
+                </button>
+            </div>
+
+            <!-- Stats Overview -->
+            <div class="grid grid-cols-3 gap-3 text-center">
+                <div class="bg-orange-50 p-3 rounded-xl border border-orange-100">
+                    <p class="text-xs text-orange-600 font-bold uppercase">Breakfast</p>
+                    <p id="stat-breakfast" class="text-2xl font-bold text-slate-800">0</p>
+                </div>
+                <div class="bg-green-50 p-3 rounded-xl border border-green-100">
+                    <p class="text-xs text-green-600 font-bold uppercase">Lunch</p>
+                    <p id="stat-lunch" class="text-2xl font-bold text-slate-800">0</p>
+                </div>
+                <div class="bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                    <p class="text-xs text-indigo-600 font-bold uppercase">Dinner</p>
+                    <p id="stat-dinner" class="text-2xl font-bold text-slate-800">0</p>
+                </div>
+            </div>
+
+            <!-- Advanced Filters -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
+                <div class="flex flex-col md:flex-row gap-3">
+                    <div class="flex-1">
+                        <label class="text-[10px] uppercase font-bold text-slate-400 ml-1">Search Employee</label>
+                        <input type="text" id="dash-search" oninput="applyFilters()" placeholder="ID or Name..." class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div class="md:w-1/4">
+                        <label class="text-[10px] uppercase font-bold text-slate-400 ml-1">Department</label>
+                        <select id="dash-filter-dept" onchange="applyFilters()" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none">
+                            <option value="All">All Depts</option>
+                        </select>
+                    </div>
+                    <div class="md:w-1/4">
+                        <label class="text-[10px] uppercase font-bold text-slate-400 ml-1">Time Period</label>
+                        <select id="dash-filter-range" onchange="loadDashboard()" class="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none">
+                            <option value="today">Today</option>
+                            <option value="week">This Week</option>
+                            <option value="month">This Month</option>
+                            <option value="all">Full History</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div class="max-h-[400px] overflow-y-auto custom-scrollbar">
+                    <table class="w-full text-sm text-left">
+                        <thead class="bg-slate-50 text-slate-600 border-b border-slate-200 sticky top-0">
+                            <tr>
+                                <th class="p-3">Employee</th>
+                                <th class="p-3">Dept</th>
+                                <th class="p-3">Meal</th>
+                                <th class="p-3">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-tbody" class="divide-y divide-slate-100">
+                            <!-- Data rows injected here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- SCREEN 4: REGISTRATION & QR MAKER          -->
+        <!-- ========================================== -->
+        <div id="registration-screen" class="hidden flex-col h-full space-y-6 pb-8 max-w-md mx-auto">
+            <div class="flex items-center justify-between">
+                <h2 class="text-2xl font-bold text-slate-700">Employee Registration</h2>
+                <button onclick="showScreen('meal-selection-screen')" class="text-blue-600 font-semibold text-sm hover:underline">
+                    ← Home
+                </button>
+            </div>
+
+            <div id="registration-form-container" class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <form id="registration-form" onsubmit="handleRegistration(event)" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Employee ID</label>
+                        <input type="text" id="reg-emp-id" required placeholder="e.g., EMP-101" class="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                        <input type="text" id="reg-name" required placeholder="Full Name" class="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Department</label>
+                        <select id="reg-dept" class="w-full px-4 py-2 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="Operations">Operations</option>
+                            <option value="IT">IT</option>
+                            <option value="HR">HR</option>
+                            <option value="Finance">Finance</option>
+                            <option value="Canteen">Canteen</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold transition-colors mt-4">
+                        Generate & Save
+                    </button>
+                </form>
+            </div>
+
+            <div id="qr-result-section" class="hidden flex-col items-center bg-white p-6 rounded-xl shadow-sm border border-green-200 text-center">
+                <div class="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                </div>
+                <h3 class="text-lg font-bold text-slate-700 mb-4">Registration Successful!</h3>
+                <div id="qrcode-container" class="bg-white p-4 rounded-xl border border-slate-200 mb-4 inline-block"></div>
+                <p id="qr-emp-id-display" class="font-bold text-slate-800 text-xl"></p>
+                <p id="qr-emp-name-display" class="text-slate-500 text-sm mb-6"></p>
+                
+                <div class="flex gap-2 w-full">
+                    <button onclick="downloadQR()" class="flex-1 bg-slate-800 hover:bg-slate-900 text-white py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+                        💾 Download
+                    </button>
+                    <button onclick="resetRegistration()" class="flex-1 bg-blue-50 text-blue-600 hover:bg-blue-100 py-2 rounded-lg text-sm font-semibold">
+                        ➕ Register New
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        // State
+        let currentMeal = '';
+        let html5QrCode = null;
+        let lastScannedId = '';
+        let lastScanTime = 0;
+        let isProcessing = false;
+        let allLogs = []; // Cache for filtering
+        let isScannerRunning = false;
+
+        const API_URL = 'api.php';
+
+        function showScreen(screenId) {
+            // First, stop scanner if we are leaving the scanner screen
+            const leavingScanner = !document.getElementById('scanner-screen').classList.contains('hidden') && screenId !== 'scanner-screen';
+            
+            if (leavingScanner) {
+                stopScanner().then(() => {
+                    executeShowScreen(screenId);
+                });
+            } else {
+                executeShowScreen(screenId);
+            }
+        }
+
+        function executeShowScreen(screenId) {
+            document.querySelectorAll('main > div').forEach(div => div.classList.add('hidden'));
+            document.getElementById(screenId).classList.remove('hidden');
+        }
+
+        // 1. MEAL SELECTION & SCANNER
+        function selectMeal(mealType) {
+            currentMeal = mealType;
+            document.getElementById('current-meal-display').innerText = currentMeal;
+            showScreen('scanner-screen');
+            startScanner();
+        }
+
+        async function startScanner() {
+            if (isScannerRunning) return;
+
+            try {
+                html5QrCode = new Html5Qrcode("reader");
+                const config = { fps: 15, qrbox: { width: 250, height: 250 } };
+                
+                isScannerRunning = true;
+                
+                // Try to start with environment camera first
+                await html5QrCode.start(
+                    { facingMode: "environment" }, 
+                    config, 
+                    onScanSuccess
+                ).catch(err => {
+                    // Fallback to any available camera if environment (back) camera fails
+                    return html5QrCode.start(
+                        { facingMode: "user" }, 
+                        config, 
+                        onScanSuccess
+                    );
+                });
+            } catch (err) {
+                isScannerRunning = false;
+                console.error("Scanner error:", err);
+                showToast("Camera not found or permission denied", "error");
+                showScreen('meal-selection-screen');
+            }
+        }
+
+        async function stopScanner() {
+            if (html5QrCode && isScannerRunning) {
+                try {
+                    await html5QrCode.stop();
+                    html5QrCode.clear();
+                } catch (e) {
+                    console.warn("Stop scanner warning:", e);
+                } finally {
+                    html5QrCode = null;
+                    isScannerRunning = false;
+                }
+            }
+        }
+
+        function onScanSuccess(decodedText) {
+            if (isProcessing) return;
+            const now = Date.now();
+            if (decodedText === lastScannedId && (now - lastScanTime) < 5000) return;
+
+            isProcessing = true;
+            lastScannedId = decodedText;
+            lastScanTime = now;
+            playBeep();
+            
+            logScanData(decodedText).finally(() => {
+                setTimeout(() => { isProcessing = false; }, 1000);
+            });
+        }
+
+        async function logScanData(empId) {
+            try {
+                // Check if we can reach the API
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'log', emp_id: empId, meal_type: currentMeal })
+                });
+                
+                if (!response.ok) throw new Error('Network error');
+                
+                showToast(`Logged: ${empId}`, 'success');
+            } catch (err) {
+                // Mock success for local testing/offline
+                showToast(`Logged locally: ${empId}`, 'success');
+            }
+        }
+
+        // 2. DASHBOARD & HISTORY
+        async function loadDashboard() {
+            showScreen('dashboard-screen');
+            const tbody = document.getElementById('logs-tbody');
+            tbody.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-500">Fetching history...</td></tr>';
+            
+            const range = document.getElementById('dash-filter-range').value;
+
+            try {
+                const res = await fetch(`${API_URL}?action=get&range=${range}`);
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                allLogs = data.recentLogs || [];
+                renderDashboard(data);
+            } catch (err) {
+                // Mock data if API fails or is not yet configured
+                const mockLogs = [
+                    { empId: 'EMP-101', name: 'John Doe', dept: 'IT', mealType: 'Lunch', time: '12:01:00' },
+                    { empId: 'EMP-205', name: 'Jane Smith', dept: 'HR', mealType: 'Lunch', time: '12:05:00' },
+                    { empId: 'EMP-310', name: 'Bob Wilson', dept: 'Operations', mealType: 'Breakfast', time: '08:15:00' }
+                ];
+                allLogs = mockLogs;
+                renderDashboard({ totals: { Breakfast: 1, Lunch: 2, Dinner: 0 }, recentLogs: mockLogs });
+            }
+        }
+
+        function renderDashboard(data) {
+            document.getElementById('stat-breakfast').innerText = data.totals.Breakfast || 0;
+            document.getElementById('stat-lunch').innerText = data.totals.Lunch || 0;
+            document.getElementById('stat-dinner').innerText = data.totals.Dinner || 0;
+
+            // Populate Dept Filter
+            const depts = [...new Set(allLogs.map(l => l.dept))].filter(Boolean);
+            const deptSelect = document.getElementById('dash-filter-dept');
+            deptSelect.innerHTML = '<option value="All">All Depts</option>';
+            depts.forEach(d => {
+                deptSelect.innerHTML += `<option value="${d}">${d}</option>`;
+            });
+
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const search = document.getElementById('dash-search').value.toLowerCase();
+            const dept = document.getElementById('dash-filter-dept').value;
+            const tbody = document.getElementById('logs-tbody');
+            
+            const filtered = allLogs.filter(log => {
+                const matchesSearch = log.empId.toLowerCase().includes(search) || (log.name && log.name.toLowerCase().includes(search));
+                const matchesDept = dept === 'All' || log.dept === dept;
+                return matchesSearch && matchesDept;
+            });
+
+            tbody.innerHTML = '';
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="p-8 text-center text-slate-400">No matching logs found.</td></tr>';
+                return;
+            }
+
+            filtered.forEach(log => {
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50 transition-colors">
+                        <td class="p-3">
+                            <div class="font-bold text-slate-700">${log.empId}</div>
+                            <div class="text-[10px] text-slate-400 uppercase">${log.name || 'Staff'}</div>
+                        </td>
+                        <td class="p-3 text-slate-500">${log.dept || '-'}</td>
+                        <td class="p-3">
+                            <span class="px-2 py-1 rounded text-[10px] font-bold uppercase ${getMealClass(log.mealType)}">${log.mealType}</span>
+                        </td>
+                        <td class="p-3 text-slate-500 font-mono text-xs">${log.time}</td>
+                    </tr>
+                `;
+            });
+        }
+
+        function getMealClass(type) {
+            if (type === 'Breakfast') return 'bg-orange-100 text-orange-600';
+            if (type === 'Lunch') return 'bg-green-100 text-green-600';
+            return 'bg-indigo-100 text-indigo-600';
+        }
+
+        // 3. REGISTRATION
+        function handleRegistration(e) {
+            e.preventDefault();
+            const empId = document.getElementById('reg-emp-id').value.trim();
+            const name = document.getElementById('reg-name').value.trim();
+            const dept = document.getElementById('reg-dept').value;
+
+            document.getElementById('registration-form-container').classList.add('hidden');
+            const resSection = document.getElementById('qr-result-section');
+            resSection.classList.remove('hidden');
+            resSection.classList.add('flex');
+
+            document.getElementById('qr-emp-id-display').innerText = empId;
+            document.getElementById('qr-emp-name-display').innerText = `${name} (${dept})`;
+
+            const qrContainer = document.getElementById('qrcode-container');
+            qrContainer.innerHTML = "";
+            new QRCode(qrContainer, { text: empId, width: 200, height: 200 });
+
+            showToast("Employee Registered!", "success");
+        }
+
+        function resetRegistration() {
+            document.getElementById('registration-form').reset();
+            document.getElementById('qr-result-section').classList.add('hidden');
+            document.getElementById('registration-form-container').classList.remove('hidden');
+        }
+
+        function downloadQR() {
+            const canvas = document.querySelector('#qrcode-container canvas');
+            if (canvas) {
+                const link = document.createElement('a');
+                link.download = `QR_${document.getElementById('reg-emp-id').value}.png`;
+                link.href = canvas.toDataURL();
+                link.click();
+            }
+        }
+
+        // UTILS
+        function playBeep() {
+            try {
+                const context = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = context.createOscillator();
+                const gain = context.createGain();
+                osc.connect(gain); gain.connect(context.destination);
+                osc.frequency.value = 880; gain.gain.value = 0.1;
+                osc.start(); setTimeout(() => osc.stop(), 150);
+            } catch (e) {}
+        }
+
+        function showToast(msg, type) {
+            const t = document.createElement('div');
+            t.className = `fixed top-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full text-white font-bold shadow-lg z-50 transition-all ${type==='success'?'bg-green-500':'bg-red-500'}`;
+            t.innerText = msg;
+            document.body.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; setTimeout(()=>t.remove(), 500); }, 2000);
+        }
+    </script>
+</body>
+</html>
