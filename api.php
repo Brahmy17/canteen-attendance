@@ -1,81 +1,184 @@
 <?php
-// CORS Headers for secure API access
-header("Access-Control-Allow-Origin: *");
-header("Content-Type: application/json; charset=UTF-8");
-header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
+// ============================================================
+// api.php — Canteen Meal Attendance API
+// ============================================================
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit();
+require_once 'config.php';
+
+header("Content-Type: application/json; charset=UTF-8");
+// SECURITY: Restrict to your domain in production.
+// Replace '*' with your actual origin, e.g. 'https://canteen.yourdomain.com'
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type");
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(200); exit(); }
+
+// ============================================================
+// HELPER: Forward request to Google Apps Script via cURL
+// ============================================================
+function callGAS($method, $params = [], $body = null) {
+    $url = GAS_URL;
+    if ($method === 'GET' && !empty($params)) {
+        $url .= '?' . http_build_query($params);
+    }
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT        => 15,
+    ]);
+    if ($method === 'POST') {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    }
+    $response = curl_exec($ch);
+    $error    = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false || $error) {
+        return ['status' => 'error', 'message' => 'Upstream request failed: ' . $error];
+    }
+    return json_decode($response, true) ?? ['status' => 'error', 'message' => 'Invalid upstream response'];
 }
 
-// ========================================================
-// CONFIGURATION
-// ========================================================
-// Paste your Google Apps Script Web App URL below:
-$google_apps_script_url = "https://script.google.com/macros/s/AKfycbyVDo8_JxFKB40xxy6LKITod4gV80Dmp1B-QsQOcInVWQw7LjnNC73Jd9YmJo4W6xiLRw/exec";
+// ============================================================
+// HELPER: Sanitize string input
+// ============================================================
+function sanitize($val) {
+    return htmlspecialchars(strip_tags(trim((string)$val)), ENT_QUOTES, 'UTF-8');
+}
 
-// Optional MySQL Configuration (Uncomment to enable local database backups)
-/*
-$db_host = "localhost";
-$db_user = "root";
-$db_pass = "";
-$db_name = "canteen_db";
-*/
-
-// ========================================================
-// HANDLE REQUESTS
-// ========================================================
 $method = $_SERVER['REQUEST_METHOD'];
 
-// Handle POST request (Logging a new scan)
+// ============================================================
+// POST — log, register, update_employee, verify_pin
+// ============================================================
 if ($method === 'POST') {
-    $input = file_get_contents("php://input");
-    $data = json_decode($input, true);
+    $data = json_decode(file_get_contents("php://input"), true);
+    if (!is_array($data)) {
+        http_response_code(400);
+        echo json_encode(['status' => 'error', 'message' => 'Malformed JSON body.']);
+        exit();
+    }
 
-    if (isset($data['action']) && $data['action'] === 'log') {
-        
-        // 1. Forward to Google Sheets via cURL
-        $ch = curl_init($google_apps_script_url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $input); // Forward exact JSON payload
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true); // Apps script returns 302 redirect on POST
-        $response = curl_exec($ch);
-        curl_close($ch);
+    $action = sanitize($data['action'] ?? '');
 
-        // 2. Optional: Save backup to local MySQL Database
-        /*
-        $conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
-        if (!$conn->connect_error) {
-            $stmt = $conn->prepare("INSERT INTO attendance_logs (emp_id, meal_type, scanned_at) VALUES (?, ?, NOW())");
-            $stmt->bind_param("ss", $data['emp_id'], $data['meal_type']);
-            $stmt->execute();
-            $stmt->close();
-            $conn->close();
+    // --- VERIFY PIN (handled in PHP — never reaches GAS) ---
+    if ($action === 'verify_pin') {
+        $pin = (string)($data['pin'] ?? '');
+        if ($pin === ADMIN_PIN) {
+            echo json_encode(['status' => 'success']);
+        } else {
+            http_response_code(401);
+            echo json_encode(['status' => 'error', 'message' => 'Invalid PIN.']);
         }
-        */
-
-        echo $response; // Return GAS response to frontend
-    } else {
-        echo json_encode(["status" => "error", "message" => "Invalid action."]);
+        exit();
     }
-} 
-// Handle GET request (Fetching Dashboard Stats)
-else if ($method === 'GET') {
-    if (isset($_GET['action']) && $_GET['action'] === 'get') {
-        // Fetch from Google Apps Script
-        $ch = curl_init($google_apps_script_url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-        $response = curl_exec($ch);
-        curl_close($ch);
 
-        echo $response;
+    // --- LOG SCAN ---
+    if ($action === 'log') {
+        $empId    = sanitize($data['emp_id'] ?? '');
+        $mealType = sanitize($data['meal_type'] ?? '');
+
+        if (empty($empId)) {
+            echo json_encode(['status' => 'error', 'message' => 'emp_id is required.']); exit();
+        }
+        if (!in_array($mealType, ['Breakfast', 'Lunch'], true)) {
+            echo json_encode(['status' => 'error', 'message' => 'Invalid meal_type.']); exit();
+        }
+
+        echo json_encode(callGAS('POST', [], [
+            'action'          => 'log',
+            'token'           => API_TOKEN,
+            'emp_id'          => $empId,
+            'meal_type'       => $mealType,
+            'amount_consumed' => sanitize($data['amount_consumed'] ?? '0'),
+            'amount_day'      => sanitize($data['amount_day'] ?? '120'),
+        ]));
+
+    // --- REGISTER ---
+    } elseif ($action === 'register') {
+        $empId = sanitize($data['emp_id'] ?? '');
+        $name  = sanitize($data['name']   ?? '');
+        $dept  = sanitize($data['dept']   ?? '');
+
+        if (empty($empId) || empty($name) || empty($dept)) {
+            echo json_encode(['status' => 'error', 'message' => 'emp_id, name, and dept are required.']); exit();
+        }
+
+        echo json_encode(callGAS('POST', [], [
+            'action'        => 'register',
+            'token'         => API_TOKEN,
+            'emp_id'        => $empId,
+            'name'          => $name,
+            'dept'          => $dept,
+            'qr_raw'        => sanitize($data['qr_raw'] ?? $empId),
+            'emp_type'      => sanitize($data['emp_type'] ?? 'Regular'),
+            'amount_day'    => sanitize($data['amount_day'] ?? '120'),
+            'amount_month'  => sanitize($data['amount_month'] ?? '3120'),
+        ]));
+
+    // --- UPDATE EMPLOYEE ---
+    } elseif ($action === 'update_employee') {
+        $originalId = sanitize($data['original_id'] ?? '');
+        $empId      = sanitize($data['emp_id']      ?? '');
+        $name       = sanitize($data['name']        ?? '');
+
+        if (empty($originalId) || empty($empId) || empty($name)) {
+            echo json_encode(['status' => 'error', 'message' => 'original_id, emp_id, and name are required.']); exit();
+        }
+
+        echo json_encode(callGAS('POST', [], [
+            'action'        => 'update_employee',
+            'token'         => API_TOKEN,
+            'original_id'   => $originalId,
+            'emp_id'        => $empId,
+            'name'          => $name,
+            'dept'          => sanitize($data['dept']         ?? ''),
+            'meal_type'     => sanitize($data['meal_type']    ?? ''),
+            'amount_day'    => sanitize($data['amount_day']   ?? ''),
+            'amount_month'  => sanitize($data['amount_month'] ?? ''),
+        ]));
+
+    // --- DELETE EMPLOYEE ---
+    } elseif ($action === 'delete_employee') {
+        $empId = sanitize($data['emp_id'] ?? '');
+        if (empty($empId)) {
+            echo json_encode(['status' => 'error', 'message' => 'emp_id is required.']); exit();
+        }
+        echo json_encode(callGAS('POST', [], [
+            'action' => 'delete_employee',
+            'token'  => API_TOKEN,
+            'emp_id' => $empId,
+        ]));
+
     } else {
-        echo json_encode(["status" => "error", "message" => "Invalid action."]);
+        http_response_code(400);
+        echo json_encode(['status' => 'error', 'message' => 'Unknown action.']);
     }
+
+// ============================================================
+// GET — get (logs/stats), employees
+// ============================================================
+} elseif ($method === 'GET') {
+    $action = sanitize($_GET['action'] ?? '');
+
+    if ($action === 'get') {
+        $range = sanitize($_GET['range'] ?? 'today');
+        if (!in_array($range, ['today','week','month','all'], true)) $range = 'today';
+        echo json_encode(callGAS('GET', ['action' => 'get', 'token' => API_TOKEN, 'range' => $range]));
+
+    } elseif ($action === 'employees') {
+        echo json_encode(callGAS('GET', ['action' => 'employees', 'token' => API_TOKEN]));
+
+    } else {
+        http_response_code(400);
+        echo json_encode(['status' => 'error', 'message' => 'Unknown action.']);
+    }
+
+} else {
+    http_response_code(405);
+    echo json_encode(['status' => 'error', 'message' => 'Method not allowed.']);
 }
-?>
