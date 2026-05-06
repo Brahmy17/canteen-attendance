@@ -1,0 +1,336 @@
+// ============================================================
+// Google Apps Script — Canteen Meal Attendance
+// Sheet 1 (Logs):      EmpID | Meal | Date | Time | Name | Dept | Amount Consumed | Balance
+// Sheet 2 (Employees): EmpID | Name | Dept | Registered At | Emp Type | Amount/Day | Amount/Month
+// ============================================================
+
+var TOKEN      = "CHANGE_THIS_TO_A_LONG_RANDOM_STRING"; // Must match API_TOKEN in config.php
+var LOGS_SHEET = "Logs";
+var EMP_SHEET  = "Employees";
+// NOTE: Admin PIN is verified server-side in PHP (api.php) only.
+
+// ============================================================
+// doPost — handles: log, register, update_employee, delete_employee
+// ============================================================
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    if (data.token !== TOKEN) return respond({ status: "error", message: "Unauthorized" });
+    var action = data.action;
+    if      (action === "log")             return handleLog(data);
+    else if (action === "register")        return handleRegister(data);
+    else if (action === "update_employee") return handleUpdateEmployee(data);
+    else if (action === "delete_employee") return handleDeleteEmployee(data);
+    else return respond({ status: "error", message: "Unknown action" });
+  } catch (err) {
+    return respond({ status: "error", message: err.message });
+  }
+}
+
+// ============================================================
+// doGet — handles: get (dashboard), employees
+// ============================================================
+function doGet(e) {
+  try {
+    var params = e.parameter;
+    if (params.token !== TOKEN) return respond({ status: "error", message: "Unauthorized" });
+    var action = params.action;
+    if      (action === "get")       return handleGetLogs(params.range || "today");
+    else if (action === "employees") return handleGetEmployees();
+    else return respond({ status: "error", message: "Unknown action" });
+  } catch (err) {
+    return respond({ status: "error", message: err.message });
+  }
+}
+
+// ============================================================
+// HANDLE: Log a meal scan
+// Policy:
+//   1. emp_id must be a registered employee
+//   2. If today's remaining balance is 0 → blocked
+//   3. If amount > remaining → log only the remaining (partial log)
+//   4. Duplicate meal type on same day → ALLOWED if remaining balance > 0
+// ============================================================
+function handleLog(data) {
+  var empId          = sanitize(data.emp_id);
+  var mealType       = sanitize(data.meal_type);
+  var amountConsumed = parseFloat(data.amount_consumed) || 0;
+  var amountDay      = parseFloat(data.amount_day) || 120;
+
+  if (!empId || ["Breakfast","Lunch"].indexOf(mealType) === -1)
+    return respond({ status: "error", message: "Invalid emp_id or meal_type" });
+
+  var ss        = SpreadsheetApp.getActiveSpreadsheet();
+  var logsSheet = getOrCreateSheet(ss, LOGS_SHEET);
+  ensureLogsHeader(logsSheet);
+
+  // 1. Must be a registered employee
+  var empInfo = lookupEmployee(ss, empId);
+  if (!empInfo)
+    return respond({ status: "error", message: "Employee not registered." });
+
+  var empName = empInfo.name;
+  var empDept = empInfo.dept;
+
+  var tz      = Session.getScriptTimeZone();
+  var today   = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  var allData = logsSheet.getDataRange().getValues();
+
+  // 2. Sum today's consumed total for this employee (all meal types combined)
+  //    Duplicate meals are ALLOWED as long as remaining balance > 0
+  var totalConsumedToday = 0;
+  for (var i = 1; i < allData.length; i++) {
+    var rowEmp     = String(allData[i][0]).trim();
+    var rowDate    = allData[i][2];
+    var rowDateStr = (rowDate instanceof Date)
+        ? Utilities.formatDate(rowDate, tz, "yyyy-MM-dd") : String(rowDate).trim();
+    if (rowEmp === empId && rowDateStr === today) {
+      totalConsumedToday += parseFloat(allData[i][6]) || 0;
+    }
+  }
+
+  var remaining = amountDay - totalConsumedToday;
+
+  // 3. Block if daily limit is already fully consumed
+  if (remaining <= 0)
+    return respond({ status: "blocked", message: "Daily limit fully consumed. Cannot log another meal today." });
+
+  // 4. Partial log: if amount exceeds remaining, cap it at remaining
+  var actualAmount = (amountConsumed > remaining) ? remaining : amountConsumed;
+
+  var newTotal  = totalConsumedToday + actualAmount;
+  var balance   = amountDay - newTotal;
+  var now       = new Date();
+
+  logsSheet.appendRow([
+    empId, mealType,
+    Utilities.formatDate(now, tz, "yyyy-MM-dd"),
+    Utilities.formatDate(now, tz, "HH:mm:ss"),
+    empName, empDept, actualAmount, balance
+  ]);
+
+  return respond({
+    status:        "success",
+    message:       "Logged successfully",
+    name:          empName,
+    dept:          empDept,
+    amountLogged:  actualAmount,
+    totalConsumed: newTotal,
+    balance:       balance
+  });
+}
+
+// ============================================================
+// HANDLE: Register a new employee
+// Columns: A=EmpID B=Name C=Dept D=RegisteredAt E=EmpType F=AmountDay G=AmountMonth
+// ============================================================
+function handleRegister(data) {
+  var empId       = sanitize(data.emp_id);
+  var name        = sanitize(data.name);
+  var dept        = sanitize(data.dept);
+  var empType     = sanitize(data.emp_type || "Regular");
+  var amountDay   = sanitize(data.amount_day || "");
+  var amountMonth = sanitize(data.amount_month || "");
+
+  if (!empId || !name || !dept)
+    return respond({ status: "error", message: "emp_id, name, and dept are required." });
+
+  var ss       = SpreadsheetApp.getActiveSpreadsheet();
+  var empSheet = getOrCreateSheet(ss, EMP_SHEET);
+  ensureEmpHeader(empSheet);
+
+  var existing = empSheet.getDataRange().getValues();
+  for (var i = 1; i < existing.length; i++) {
+    if (String(existing[i][0]).trim() === empId)
+      return respond({ status: "duplicate", message: "Employee ID already registered." });
+  }
+
+  var tz = Session.getScriptTimeZone();
+  empSheet.appendRow([
+    empId, name, dept,
+    Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss"),
+    empType, amountDay, amountMonth
+  ]);
+
+  return respond({ status: "success", message: "Employee registered successfully." });
+}
+
+// ============================================================
+// HANDLE: Get logs + stats for dashboard
+// ============================================================
+function handleGetLogs(range) {
+  var ss        = SpreadsheetApp.getActiveSpreadsheet();
+  var logsSheet = getOrCreateSheet(ss, LOGS_SHEET);
+  ensureLogsHeader(logsSheet);
+
+  var data  = logsSheet.getDataRange().getValues();
+  var tz    = Session.getScriptTimeZone();
+  var now   = new Date();
+  var today = Utilities.formatDate(now, tz, "yyyy-MM-dd");
+
+  var rangeStart = null;
+  if (range === "today") {
+    rangeStart = today;
+  } else if (range === "week") {
+    var w = new Date(now); w.setDate(now.getDate() - 6);
+    rangeStart = Utilities.formatDate(w, tz, "yyyy-MM-dd");
+  } else if (range === "month") {
+    var m = new Date(now); m.setDate(now.getDate() - 29);
+    rangeStart = Utilities.formatDate(m, tz, "yyyy-MM-dd");
+  }
+  // "all" => rangeStart stays null
+
+  var totals = { Breakfast: 0, Lunch: 0 };
+  var logs   = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var row        = data[i];
+    var rowDate    = row[2];
+    var rowDateStr = (rowDate instanceof Date)
+        ? Utilities.formatDate(rowDate, tz, "yyyy-MM-dd") : String(rowDate).trim();
+    if (rangeStart && rowDateStr < rangeStart) continue;
+
+    var meal = String(row[1]).trim();
+    if (rowDateStr === today && totals[meal] !== undefined) totals[meal]++;
+
+    var t    = row[3];
+    var tStr = (t instanceof Date) ? Utilities.formatDate(t, tz, "HH:mm:ss") : String(t);
+    logs.push({
+      empId: String(row[0]), mealType: meal, date: rowDateStr, time: tStr,
+      name: String(row[4] || ""), dept: String(row[5] || ""),
+      amountConsumed: String(row[6] || ""), balance: String(row[7] || "")
+    });
+  }
+
+  logs.reverse();
+  return respond({ totals: totals, recentLogs: logs });
+}
+
+// ============================================================
+// HANDLE: Get full employee list
+// Columns: A=EmpID B=Name C=Dept D=RegisteredAt E=EmpType F=AmountDay G=AmountMonth
+// ============================================================
+function handleGetEmployees() {
+  var ss       = SpreadsheetApp.getActiveSpreadsheet();
+  var empSheet = getOrCreateSheet(ss, EMP_SHEET);
+  ensureEmpHeader(empSheet);
+  var data = empSheet.getDataRange().getValues();
+  var list = [];
+  for (var i = 1; i < data.length; i++) {
+    list.push({
+      empId:        String(data[i][0]),
+      name:         String(data[i][1]),
+      dept:         String(data[i][2]),
+      registeredAt: String(data[i][3]),
+      empType:      String(data[i][4] || "Regular"),
+      amountDay:    String(data[i][5] || ""),
+      amountMonth:  String(data[i][6] || "")
+    });
+  }
+  return respond({ employees: list });
+}
+
+// ============================================================
+// HANDLE: Update employee details
+// Columns: A=EmpID B=Name C=Dept D=RegisteredAt E=EmpType F=AmountDay G=AmountMonth
+// ============================================================
+function handleUpdateEmployee(data) {
+  var originalId  = sanitize(data.original_id);
+  var empId       = sanitize(data.emp_id);
+  var name        = sanitize(data.name);
+  var dept        = sanitize(data.dept);
+  var empType     = sanitize(data.meal_type || "");  // field name kept as meal_type for API compat
+  var amountDay   = sanitize(data.amount_day || "");
+  var amountMonth = sanitize(data.amount_month || "");
+
+  if (!originalId || !empId || !name)
+    return respond({ status: "error", message: "original_id, emp_id, and name are required." });
+
+  var ss       = SpreadsheetApp.getActiveSpreadsheet();
+  var empSheet = getOrCreateSheet(ss, EMP_SHEET);
+  var rows     = empSheet.getDataRange().getValues();
+
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === originalId) {
+      empSheet.getRange(i+1, 1).setValue(empId);    // A: EmpID
+      empSheet.getRange(i+1, 2).setValue(name);     // B: Name
+      empSheet.getRange(i+1, 3).setValue(dept);     // C: Dept
+      empSheet.getRange(i+1, 5).setValue(empType);  // E: EmpType
+      empSheet.getRange(i+1, 6).setValue(amountDay);   // F: AmountDay
+      empSheet.getRange(i+1, 7).setValue(amountMonth); // G: AmountMonth
+      return respond({ status: "success", message: "Employee updated." });
+    }
+  }
+  return respond({ status: "error", message: "Employee not found." });
+}
+
+// ============================================================
+// HANDLE: Delete employee
+// ============================================================
+function handleDeleteEmployee(data) {
+  var empId = sanitize(data.emp_id);
+  if (!empId) return respond({ status: "error", message: "emp_id is required." });
+
+  var ss       = SpreadsheetApp.getActiveSpreadsheet();
+  var empSheet = getOrCreateSheet(ss, EMP_SHEET);
+  var rows     = empSheet.getDataRange().getValues();
+
+  for (var i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === empId) {
+      empSheet.deleteRow(i + 1);
+      return respond({ status: "success", message: "Employee deleted." });
+    }
+  }
+  return respond({ status: "error", message: "Employee not found." });
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function lookupEmployee(ss, empId) {
+  try {
+    var sheet = ss.getSheetByName(EMP_SHEET);
+    if (!sheet) return null;
+    var data = sheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (String(data[i][0]).trim() === empId)
+        return { name: String(data[i][1]), dept: String(data[i][2]), empType: String(data[i][4] || "Regular") };
+    }
+  } catch(e) {}
+  return null;
+}
+
+function getOrCreateSheet(ss, name) {
+  var s = ss.getSheetByName(name);
+  return s || ss.insertSheet(name);
+}
+
+function ensureLogsHeader(sheet) {
+  if (sheet.getLastRow() === 0 || String(sheet.getRange(1,1).getValue()).trim() !== "EmpID") {
+    var h = ["EmpID","Meal","Date","Time","Name","Dept","Amount Consumed","Balance"];
+    if (sheet.getLastRow() === 0) sheet.appendRow(h);
+    else { sheet.insertRowBefore(1); sheet.getRange(1,1,1,h.length).setValues([h]); }
+    sheet.getRange(1,1,1,h.length).setFontWeight("bold").setBackground("#1e40af").setFontColor("#ffffff");
+  }
+}
+
+function ensureEmpHeader(sheet) {
+  if (sheet.getLastRow() === 0 || String(sheet.getRange(1,1).getValue()).trim() !== "EmpID") {
+    // Columns: A=EmpID B=Name C=Dept D=Registered At E=Emp Type F=Amount/Day G=Amount/Month
+    var h = ["EmpID","Name","Dept","Registered At","Emp Type","Amount/Day","Amount/Month"];
+    if (sheet.getLastRow() === 0) sheet.appendRow(h);
+    else { sheet.insertRowBefore(1); sheet.getRange(1,1,1,h.length).setValues([h]); }
+    sheet.getRange(1,1,1,h.length).setFontWeight("bold").setBackground("#1e40af").setFontColor("#ffffff");
+    sheet.setRowHeight(1, 30);
+  }
+}
+
+function sanitize(val) {
+  if (val === null || val === undefined) return "";
+  return String(val).replace(/<[^>]*>/g, "").replace(/\0/g, "").trim();
+}
+
+function respond(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
