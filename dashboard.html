@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canteen — Auditor Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <a class="logo" href="index.html">
+      <div class="logo-icon">🍽</div>
+      <div>
+        <div class="logo-text">Canteen System</div>
+        <div class="logo-sub">Meal Attendance</div>
+      </div>
+    </a>
+  </header>
+
+  <main>
+    <div class="page-wrap wide">
+      <div class="row-between">
+        <div class="page-title">Auditor Dashboard<small id="dash-date-label"></small></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-ghost btn-sm" onclick="openExportModal()">⬇ Export CSV</button>
+          <a class="btn btn-primary btn-sm" href="employees.html">📝 View Employee</a>
+          <a class="btn btn-primary btn-sm" href="register.html">📝 Register Employee</a>
+          <a class="back-btn" href="index.html">‹ Home</a>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card breakfast">
+          <div class="stat-icon">🍳</div>
+          <div><div class="stat-label">Breakfast</div><div class="stat-value" id="stat-breakfast">—</div></div>
+        </div>
+        <div class="stat-card lunch">
+          <div class="stat-icon">🍱</div>
+          <div><div class="stat-label">Lunch</div><div class="stat-value" id="stat-lunch">—</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:14px;">
+        <div class="filter-row">
+          <input type="text" class="form-input" id="dash-search" placeholder="Search ID or name…" oninput="applyFilters()" />
+          <select class="form-input" id="dash-filter-dept" onchange="applyFilters()" style="max-width:160px;">
+            <option value="All">All Departments</option>
+          </select>
+          <select class="form-input" id="dash-filter-meal" onchange="applyFilters()" style="max-width:130px;">
+            <option value="All">All Meals</option>
+            <option value="Breakfast">Breakfast</option>
+            <option value="Lunch">Lunch</option>
+          </select>
+          <input type="date" class="form-input" id="dash-filter-date" onchange="applyFilters()" style="max-width:155px;" />
+          <button class="btn btn-ghost btn-sm" onclick="clearDateFilter()">✕ All Dates</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Employee</th><th>Department</th><th>Meal</th>
+                <th>Amount</th><th>Balance</th><th>Date</th><th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="logs-tbody">
+              <tr><td colspan="7"><div class="empty-state"><div class="empty-icon">⏳</div>Loading…</div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- CSV EXPORT MODAL -->
+  <div id="export-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeExportModal()">
+    <div class="modal">
+      <h3>⬇ Export CSV</h3>
+      <p>Pick a date to export that day's logs, or leave blank to export all visible records.</p>
+      <div class="form-group">
+        <label class="form-label">Select Date</label>
+        <input type="date" id="export-date" class="form-input" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeExportModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="doExportCSV()">Export</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+  <script src="shared.js"></script>
+  <script>
+    // Guard: redirect to PIN if not authenticated
+    if (!sessionStorage.getItem('canteen_auth')) {
+      window.location.href = 'pin.html';
+    }
+
+    let allLogs = [];
+
+    // Local timezone-safe today string (GAS formats dates as yyyy-MM-dd in script timezone)
+    function todayLocal() {
+      const d = new Date();
+      return d.getFullYear() + '-'
+        + String(d.getMonth() + 1).padStart(2, '0') + '-'
+        + String(d.getDate()).padStart(2, '0');
+    }
+
+    document.getElementById('dash-date-label').textContent =
+      new Date().toLocaleDateString('en-PH', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+    // Start with today pre-selected so you see today's logs immediately
+    document.getElementById('dash-filter-date').value = todayLocal();
+
+    // ── LOAD ─────────────────────────────────────────────────
+    async function loadDashboard() {
+      document.getElementById('logs-tbody').innerHTML =
+        `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">⏳</div>Loading logs…</div></td></tr>`;
+      try {
+        // range=all so every date is available for filtering without re-fetching
+        const res = await fetch(`${API_URL}?action=get&range=all`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();           // read as text first
+        let data;
+        try { data = JSON.parse(text); }
+        catch { throw new Error('Server returned invalid JSON. Check GAS_URL in config.php.'); }
+        if (data.status === 'error') throw new Error(data.message);
+        allLogs = data.recentLogs || [];
+        renderDashboard();
+      } catch (err) {
+        document.getElementById('logs-tbody').innerHTML =
+          `<tr><td colspan="7"><div class="empty-state" style="color:var(--red);">
+            <div class="empty-icon">⚠️</div>
+            ${escHtml(err.message || 'Could not load logs.')}
+          </div></td></tr>`;
+        showToast(err.message || 'Failed to load logs.', 'error');
+      }
+    }
+
+    // ── RENDER ────────────────────────────────────────────────
+    function renderDashboard() {
+      const t = todayLocal();
+      document.getElementById('stat-breakfast').textContent =
+        new Set(allLogs.filter(l => l.date === t && l.mealType === 'Breakfast').map(l => l.empId)).size;
+      document.getElementById('stat-lunch').textContent =
+        new Set(allLogs.filter(l => l.date === t && l.mealType === 'Lunch').map(l => l.empId)).size;
+
+      // Populate dept dropdown from actual data
+      const depts = [...new Set(allLogs.map(l => l.dept).filter(Boolean))].sort();
+      const sel   = document.getElementById('dash-filter-dept');
+      const prevDept = sel.value;
+      sel.innerHTML  = '<option value="All">All Departments</option>';
+      depts.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d; opt.textContent = d;
+        sel.appendChild(opt);
+      });
+      if (prevDept && prevDept !== 'All') sel.value = prevDept;
+
+      applyFilters();
+    }
+
+    // ── FILTERS ───────────────────────────────────────────────
+    function applyFilters() {
+      const search  = document.getElementById('dash-search').value.toLowerCase();
+      const dept    = document.getElementById('dash-filter-dept').value;
+      const meal    = document.getElementById('dash-filter-meal').value;
+      const dateVal = document.getElementById('dash-filter-date').value;
+      const tbody   = document.getElementById('logs-tbody');
+
+      const filtered = allLogs.filter(l => {
+        const mSearch = (l.empId || '').toLowerCase().includes(search)
+                     || ((l.name || '').toLowerCase().includes(search));
+        return mSearch
+          && (dept    === 'All' || l.dept     === dept)
+          && (meal    === 'All' || l.mealType === meal)
+          && (!dateVal           || l.date     === dateVal);
+      });
+
+      if (!filtered.length) {
+        const msg = allLogs.length === 0
+          ? 'No logs found. Scan some meals first.'
+          : 'No records match the current filters.';
+        tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🔍</div>${msg}</div></td></tr>`;
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      filtered.forEach(log => {
+        const consumed = (log.amountConsumed !== '' && log.amountConsumed !== undefined)
+          ? parseFloat(log.amountConsumed) : null;
+        const balance  = (log.balance !== '' && log.balance !== undefined)
+          ? parseFloat(log.balance) : null;
+        const balStyle = balance === null ? ''
+          : balance > 0 ? 'color:var(--green)'
+          : balance < 0 ? 'color:var(--red)'
+          : 'color:var(--text-muted)';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><div class="emp-id">${escHtml(log.empId || '—')}</div><div class="emp-name">${escHtml(log.name || '—')}</div></td>
+          <td>${escHtml(log.dept || '—')}</td>
+          <td><span class="meal-badge ${escHtml(log.mealType || '')}">${escHtml(log.mealType || '—')}</span></td>
+          <td class="time-mono">${consumed !== null && !isNaN(consumed) ? '₱' + consumed.toFixed(2) : '—'}</td>
+          <td class="time-mono" style="${balStyle};font-weight:600;">${balance !== null && !isNaN(balance) ? '₱' + balance.toFixed(2) : '—'}</td>
+          <td class="time-mono">${escHtml(log.date || '—')}</td>
+          <td class="time-mono">${escHtml(log.time || '—')}</td>`;
+        frag.appendChild(tr);
+      });
+      tbody.innerHTML = '';
+      tbody.appendChild(frag);
+    }
+
+    function clearDateFilter() {
+      document.getElementById('dash-filter-date').value = '';
+      applyFilters();
+    }
+
+    // ── CSV EXPORT ────────────────────────────────────────────
+    function openExportModal() {
+      if (!allLogs.length) { showToast('No data to export.', 'warning'); return; }
+      document.getElementById('export-date').value = todayLocal();
+      document.getElementById('export-modal').style.display = 'flex';
+    }
+    function closeExportModal() { document.getElementById('export-modal').style.display = 'none'; }
+
+    function doExportCSV() {
+      const exportDate = document.getElementById('export-date').value;
+      const search = document.getElementById('dash-search').value.toLowerCase();
+      const dept   = document.getElementById('dash-filter-dept').value;
+      const meal   = document.getElementById('dash-filter-meal').value;
+
+      const rows = allLogs.filter(l => {
+        const mSearch = (l.empId||'').toLowerCase().includes(search)||((l.name||'').toLowerCase().includes(search));
+        return mSearch
+          && (dept === 'All' || l.dept     === dept)
+          && (meal === 'All' || l.mealType === meal)
+          && (!exportDate    || l.date     === exportDate);
+      });
+
+      if (!rows.length) { showToast('No records for that selection.', 'warning'); return; }
+
+      const csv = [
+        ['Employee ID','Name','Department','Meal','Amount Consumed (₱)','Balance (₱)','Date','Time'],
+        ...rows.map(l => [l.empId,l.name||'',l.dept||'',l.mealType,l.amountConsumed||'',l.balance||'',l.date||'',l.time||''])
+      ].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url  = URL.createObjectURL(blob);
+      Object.assign(document.createElement('a'), {
+        href: url, download: `canteen_${exportDate || 'all'}.csv`
+      }).click();
+      URL.revokeObjectURL(url);
+      closeExportModal();
+      showToast(`Exported${exportDate ? ' for ' + exportDate : ''}!`, 'success');
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>

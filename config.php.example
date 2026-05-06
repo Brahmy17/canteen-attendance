@@ -1,0 +1,9 @@
+<?php
+// ============================================================
+// config.php.example — Copy this to config.php and fill in values
+// config.php is gitignored — never commit the real one!
+// ============================================================
+
+define('GAS_URL',    'YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL');
+define('API_TOKEN',  'YOUR_LONG_RANDOM_SECRET_TOKEN');   // Must match appscript.js TOKEN
+define('ADMIN_PIN',  '1234');                             // Change this!

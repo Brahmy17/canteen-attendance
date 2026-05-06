@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canteen — Scanner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    #pending-card.blocked { border-color: var(--red); box-shadow: 0 0 0 4px rgba(220,38,38,0.1); }
+    #pending-card.blocked .pending-balance-val { color: var(--red); }
+    .blocked-msg { background: var(--red-bg); border: 1px solid var(--red-border); border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; color: var(--red); font-weight: 500; text-align: center; }
+    .exceed-amounts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 14px 0; }
+    .exceed-cell { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 8px; text-align: center; }
+    .exceed-cell-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 4px; }
+    .exceed-cell-val   { font-size: 16px; font-weight: 700; font-family: 'DM Mono', monospace; }
+    .exceed-cell.over  .exceed-cell-val { color: var(--red); }
+    .exceed-cell.rem   .exceed-cell-val { color: var(--green); }
+    .exceed-cell.req   .exceed-cell-val { color: var(--orange); }
+    .meal-select-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; box-shadow: var(--shadow-sm); display: flex; align-items: center; gap: 14px; }
+    .meal-select-card .form-label { white-space: nowrap; margin: 0; font-size: 13px; }
+    /* Resolving spinner inside pending card */
+    .resolving-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; color: var(--text-muted); font-size: 13px; }
+    .resolving-spinner { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="index.html">
+      <div class="logo-icon">🍽</div>
+      <div>
+        <div class="logo-text">Canteen System</div>
+        <div class="logo-sub">Meal Attendance</div>
+      </div>
+    </a>
+    <span id="header-meal-badge"></span>
+  </header>
+
+  <main>
+    <div class="page-wrap wide">
+      <div class="row-between">
+        <div class="page-title">Scanner<small>Select meal, then scan or enter ID.</small></div>
+        <a class="back-btn" href="index.html">‹ Back</a>
+      </div>
+
+      <!-- MEAL DROPDOWN -->
+      <div class="meal-select-card">
+        <label class="form-label" for="meal-select">Current Meal</label>
+        <select id="meal-select" class="form-input" style="max-width:240px;font-size:14px;font-weight:600;" onchange="onMealChange()">
+          <option value="Breakfast">🍳 Breakfast — 6:00 AM to 9:00 AM</option>
+          <option value="Lunch">🍱 Lunch — 11:30 AM to 1:30 PM</option>
+        </select>
+      </div>
+
+      <div class="scanner-layout">
+        <!-- LEFT -->
+        <div class="scanner-panel">
+          <div id="reader"></div>
+          <div class="scanner-status">
+            <div class="status-dot"></div>
+            <span>Camera active — ready to scan</span>
+          </div>
+
+          <!-- FLASH -->
+          <div id="scan-result-flash">
+            <span class="flash-icon"></span>
+            <div class="flash-body"><strong id="flash-title"></strong><span id="flash-sub"></span></div>
+          </div>
+
+          <!-- PENDING CARD -->
+          <div id="pending-card" style="display:none;">
+            <div class="pending-header">
+              <div class="pending-avatar" id="pending-avatar">—</div>
+              <div class="pending-info">
+                <div class="pending-name" id="pending-name">—</div>
+                <div class="pending-sub"  id="pending-sub">—</div>
+              </div>
+              <div class="pending-balance-box">
+                <div class="pending-balance-label" id="pending-balance-label">Remaining Today</div>
+                <div class="pending-balance-val"   id="pending-remaining">₱—</div>
+              </div>
+            </div>
+
+            <!-- Resolving spinner — shown briefly while fetching employee -->
+            <div id="pending-resolving-row" class="resolving-row" style="display:none;">
+              <div class="resolving-spinner"></div>
+              <span>Looking up employee…</span>
+            </div>
+
+            <!-- Amount entry -->
+            <div id="pending-amount-row" class="pending-amount-row" style="display:none;">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">Amount Consumed (₱)</label>
+                <input type="number" id="pending-amount" class="form-input"
+                  placeholder="0.00" min="0" step="0.01"
+                  onkeydown="if(event.key==='Enter')confirmLog()" />
+              </div>
+              <button class="btn btn-primary" style="width:auto;padding:10px 22px;align-self:flex-end;" onclick="confirmLog()">✔ Done</button>
+              <button class="btn btn-ghost"   style="width:auto;padding:10px 16px;align-self:flex-end;" onclick="cancelPending()">✕</button>
+            </div>
+
+            <!-- Blocked -->
+            <div id="pending-blocked-row" style="display:none;">
+              <div class="blocked-msg">🚫 Daily limit fully consumed. Cannot log another meal today.</div>
+              <div style="margin-top:8px;">
+                <button class="btn btn-ghost" onclick="cancelPending()">Close</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- MANUAL ENTRY -->
+          <div class="manual-card">
+            <h3>✏️ Manual Entry</h3>
+            <div class="manual-row">
+              <input type="text" id="manual-emp-id" class="form-input"
+                placeholder="Enter Employee ID…"
+                onkeydown="if(event.key==='Enter')submitManual()" />
+              <button class="btn btn-primary" onclick="submitManual()">Log</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT: Live feed -->
+        <div class="attendance-panel">
+          <div class="attendance-header">
+            <h3>📋 Today's Attendance</h3>
+            <span class="attendance-count" id="att-count">0 logged</span>
+          </div>
+          <div class="attendance-list" id="attendance-list">
+            <div class="att-empty"><div class="att-empty-icon">📋</div>No scans yet today.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- EXCEED MODAL -->
+  <div id="exceed-modal" class="modal-overlay" style="display:none;">
+    <div class="modal" style="max-width:380px;">
+      <h3>⚠️ Amount Exceeds Limit</h3>
+      <p>The amount entered is more than the remaining daily balance.</p>
+      <div class="exceed-amounts">
+        <div class="exceed-cell req">
+          <div class="exceed-cell-label">Requested</div>
+          <div class="exceed-cell-val" id="ex-requested">—</div>
+        </div>
+        <div class="exceed-cell rem">
+          <div class="exceed-cell-label">Remaining</div>
+          <div class="exceed-cell-val" id="ex-remaining">—</div>
+        </div>
+        <div class="exceed-cell over">
+          <div class="exceed-cell-label">Over by</div>
+          <div class="exceed-cell-val" id="ex-over">—</div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+        If you proceed, only <strong id="ex-will-log" style="color:var(--green);"></strong> will be logged — the excess is dropped.
+      </p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeExceedModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="proceedPartialLog()">Proceed with ₱<span id="ex-proceed-amt">—</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+  <script src="shared.js"></script>
+  <script>
+    // ── STATE ──────────────────────────────────────────────────
+    let html5QrCode     = null;
+    let isScannerActive = false;
+    let lastScannedId   = '';
+    let lastScanTime    = 0;
+    let isProcessing    = false;
+    let pendingEmp      = null;
+    let sessionLogs     = [];
+    let exceedContext   = null;
+
+    // ── MEAL SELECTION ─────────────────────────────────────────
+    function getCurrentMeal() {
+      return document.getElementById('meal-select').value;
+    }
+    function onMealChange() {
+      const meal  = getCurrentMeal();
+      const icons = { Breakfast: '🍳', Lunch: '🍱' };
+      const badge = document.getElementById('header-meal-badge');
+      badge.textContent   = `${icons[meal] || ''} ${meal}`;
+      badge.style.display = 'block';
+      // Only cancel if there's actually a pending entry
+      if (pendingEmp) cancelPending();
+    }
+
+    // ── SCANNER ────────────────────────────────────────────────
+    async function startScanner() {
+      if (isScannerActive) return;
+      try {
+        html5QrCode     = new Html5Qrcode("reader");
+        const cfg       = { fps: 15, qrbox: { width: 220, height: 220 } };
+        isScannerActive = true;
+        await html5QrCode.start({ facingMode: "environment" }, cfg, onScanSuccess)
+          .catch(() => html5QrCode.start({ facingMode: "user" }, cfg, onScanSuccess));
+      } catch (err) {
+        isScannerActive = false;
+        showToast("Camera not available: " + (err.message || 'permission denied'), "error");
+      }
+    }
+    async function stopScanner() {
+      if (html5QrCode && isScannerActive) {
+        try { await html5QrCode.stop(); html5QrCode.clear(); } catch {}
+        finally { html5QrCode = null; isScannerActive = false; }
+      }
+    }
+    function onScanSuccess(decoded) {
+      if (isProcessing || pendingEmp) return;
+      const now = Date.now();
+      if (decoded === lastScannedId && now - lastScanTime < 5000) return;
+      lastScannedId = decoded;
+      lastScanTime  = now;
+      playBeep();
+      resolveAndShowPending(decoded);
+    }
+
+    // ── MANUAL ENTRY ───────────────────────────────────────────
+    function submitManual() {
+      const input = document.getElementById('manual-emp-id');
+      const empId = input.value.trim();
+      if (!empId)     { showToast('Enter an Employee ID.', 'error'); return; }
+      if (pendingEmp) { showToast('Finish the current entry first.', 'warning'); return; }
+      if (isProcessing) { showToast('Please wait…', 'warning'); return; }
+      input.value = '';
+      resolveAndShowPending(empId);
+    }
+
+    // ── RESOLVE EMPLOYEE ──────────────────────────────────────
+    async function resolveAndShowPending(empId) {
+      // Show pending card immediately with spinner while we look up
+      isProcessing = true;
+      showPendingShell(empId);
+
+      let emp = null;
+      try {
+        // First try from cache
+        let employees = await getEmployees();
+
+        // If cache was empty (first load / failed), force a fresh fetch once
+        if (!employees || employees.length === 0) {
+          invalidateEmpCache();
+          employees = await getEmployees();
+        }
+
+        emp = employees.find(e => e.empId === empId) || null;
+      } catch (err) {
+        hidePendingShell();
+        isProcessing = false;
+        showFlash('error', empId, 'Failed to load employee list: ' + (err.message || 'network error'));
+        lastScannedId = '';
+        return;
+      }
+
+      if (!emp) {
+        hidePendingShell();
+        isProcessing = false;
+        showFlash('error', empId, 'Employee not found. Only registered employees can log a meal.');
+        lastScannedId = '';
+        return;
+      }
+
+      // Employee found — populate card
+      const name      = emp.name  || empId;
+      const dept      = emp.dept  || '';
+      const empType   = emp.empType || 'Regular';
+      const amountDay = parseFloat(emp.amountDay) || EMP_AMOUNTS[empType] || 120;
+      const consumed  = getTodayConsumed(empId);
+      const remaining = Math.max(0, amountDay - consumed);
+
+      pendingEmp = { empId, name, dept, empType, amountDay, consumedToday: consumed, remaining };
+
+      // Fill card details
+      const initials = name.trim().slice(0, 2).toUpperCase();
+      document.getElementById('pending-avatar').textContent    = initials;
+      document.getElementById('pending-name').textContent      = name;
+      document.getElementById('pending-sub').textContent       = `${dept} · ${empType} · Limit ₱${amountDay}`;
+      document.getElementById('pending-remaining').textContent = `₱${remaining.toFixed(2)}`;
+      document.getElementById('pending-balance-label').textContent =
+        remaining === 0 ? 'Limit Reached' : 'Remaining Today';
+
+      // Show correct action row
+      document.getElementById('pending-resolving-row').style.display = 'none';
+      const card = document.getElementById('pending-card');
+      card.className = remaining === 0 ? 'blocked' : '';
+
+      if (remaining === 0) {
+        document.getElementById('pending-amount-row').style.display  = 'none';
+        document.getElementById('pending-blocked-row').style.display = 'block';
+      } else {
+        document.getElementById('pending-amount-row').style.display  = 'flex';
+        document.getElementById('pending-blocked-row').style.display = 'none';
+        document.getElementById('pending-amount').value = '';
+        setTimeout(() => document.getElementById('pending-amount').focus(), 80);
+      }
+
+      isProcessing = false;
+    }
+
+    // Show the card shell immediately with a spinner (before employee is resolved)
+    function showPendingShell(empId) {
+      const card = document.getElementById('pending-card');
+      card.style.display = 'block';
+      card.className     = '';
+      document.getElementById('pending-avatar').textContent    = empId.slice(0, 2).toUpperCase();
+      document.getElementById('pending-name').textContent      = empId;
+      document.getElementById('pending-sub').textContent       = 'Looking up…';
+      document.getElementById('pending-remaining').textContent = '₱—';
+      document.getElementById('pending-balance-label').textContent = 'Remaining Today';
+      document.getElementById('pending-resolving-row').style.display = 'flex';
+      document.getElementById('pending-amount-row').style.display    = 'none';
+      document.getElementById('pending-blocked-row').style.display   = 'none';
+    }
+    function hidePendingShell() {
+      document.getElementById('pending-card').style.display = 'none';
+    }
+
+    // Sum today's consumed from the live feed for this employee
+    function getTodayConsumed(empId) {
+      return sessionLogs
+        .filter(l => l.empId === empId)
+        .reduce((sum, l) => sum + (parseFloat(l.amountConsumed) || 0), 0);
+    }
+
+    // ── CANCEL ─────────────────────────────────────────────────
+    function cancelPending() {
+      pendingEmp    = null;
+      exceedContext = null;
+      lastScannedId = '';
+      const card = document.getElementById('pending-card');
+      if (card) {
+        card.style.display = 'none';
+        card.className     = '';
+      }
+      const amtInput = document.getElementById('pending-amount');
+      if (amtInput) amtInput.value = '';
+      const amtRow  = document.getElementById('pending-amount-row');
+      const blkRow  = document.getElementById('pending-blocked-row');
+      const resRow  = document.getElementById('pending-resolving-row');
+      if (amtRow) amtRow.style.display  = 'none';
+      if (blkRow) blkRow.style.display  = 'none';
+      if (resRow) resRow.style.display  = 'none';
+    }
+
+    // ── CONFIRM LOG ────────────────────────────────────────────
+    function confirmLog() {
+      if (!pendingEmp) return;
+      const amount = parseFloat(document.getElementById('pending-amount').value.trim());
+      if (isNaN(amount) || amount <= 0) {
+        showToast('Enter a valid amount greater than 0.', 'error'); return;
+      }
+      if (amount > pendingEmp.remaining) {
+        showExceedModal(pendingEmp, amount, pendingEmp.remaining);
+        return;
+      }
+      submitLog(pendingEmp, amount);
+    }
+
+    // ── EXCEED MODAL ───────────────────────────────────────────
+    function showExceedModal(emp, requested, remaining) {
+      exceedContext = { emp: { ...emp }, partialAmount: remaining };
+      document.getElementById('ex-requested').textContent   = `₱${requested.toFixed(2)}`;
+      document.getElementById('ex-remaining').textContent   = `₱${remaining.toFixed(2)}`;
+      document.getElementById('ex-over').textContent        = `₱${(requested - remaining).toFixed(2)}`;
+      document.getElementById('ex-will-log').textContent    = `₱${remaining.toFixed(2)}`;
+      document.getElementById('ex-proceed-amt').textContent = remaining.toFixed(2);
+      document.getElementById('exceed-modal').style.display = 'flex';
+    }
+    function closeExceedModal() {
+      document.getElementById('exceed-modal').style.display = 'none';
+      exceedContext = null;
+    }
+    function proceedPartialLog() {
+      if (!exceedContext) return;
+      const { emp, partialAmount } = exceedContext;
+      exceedContext = null;
+      closeExceedModal();
+      submitLog(emp, partialAmount);
+    }
+
+    // ── SUBMIT LOG ─────────────────────────────────────────────
+    async function submitLog(emp, amount) {
+      isProcessing = true;
+      cancelPending();
+      showFlash('loading', emp.name, 'Logging…');
+      const meal = getCurrentMeal();
+
+      try {
+        const res  = await fetch(API_URL, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:          'log',
+            emp_id:          emp.empId,
+            meal_type:       meal,
+            amount_consumed: amount,
+            amount_day:      emp.amountDay
+          })
+        });
+        const data = await res.json();
+
+        if (data.status === 'success') {
+          const balance = parseFloat(data.balance);
+          showFlash('success',
+            `${data.name || emp.name} (${data.dept || emp.dept})`,
+            `✓ ${meal} logged · ₱${amount.toFixed(2)} · Balance: ₱${balance.toFixed(2)}`
+          );
+          addToFeed({
+            empId: emp.empId,
+            name:  data.name  || emp.name,
+            dept:  data.dept  || emp.dept,
+            mealType: meal,
+            time: nowTime(),
+            amountConsumed: amount,
+            balance
+          });
+        } else if (data.status === 'blocked') {
+          showFlash('error', emp.name, data.message || 'Daily limit fully consumed.');
+        } else {
+          showFlash('error', emp.name || emp.empId, data.message || 'Unknown error from server.');
+        }
+      } catch (err) {
+        showFlash('error', emp.name || emp.empId, 'Network error — ' + (err.message || 'check connection'));
+      }
+
+      isProcessing = false;
+    }
+
+    // ── FEED ───────────────────────────────────────────────────
+    async function loadSessionFeed() {
+      try {
+        const res  = await fetch(`${API_URL}?action=get&range=today`);
+        const data = await res.json();
+        sessionLogs = (data.recentLogs || []).slice(0, 100);
+      } catch {
+        sessionLogs = [];
+      }
+      renderFeed();
+    }
+    function addToFeed(entry) {
+      sessionLogs.unshift(entry);
+      renderFeed();
+    }
+    function renderFeed() {
+      const list  = document.getElementById('attendance-list');
+      const count = document.getElementById('att-count');
+      count.textContent = `${sessionLogs.length} logged`;
+      if (!sessionLogs.length) {
+        list.innerHTML = `<div class="att-empty"><div class="att-empty-icon">📋</div>No attendance yet today.</div>`;
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      sessionLogs.forEach(log => {
+        const initials = (log.name || log.empId || '??').slice(0, 2).toUpperCase();
+        const balance  = log.balance       !== undefined ? parseFloat(log.balance)       : null;
+        const consumed = log.amountConsumed !== undefined ? parseFloat(log.amountConsumed) : null;
+        const balClass = balance === null ? '' : balance > 0 ? 'positive' : balance === 0 ? 'zero' : 'negative';
+        const row      = document.createElement('div');
+        row.className  = 'att-row';
+        row.innerHTML  = `
+          <div class="att-avatar">${escHtml(initials)}</div>
+          <div class="att-info">
+            <div class="att-name">${escHtml(log.name || log.empId)}</div>
+            <div class="att-id">${escHtml(log.empId)}</div>
+          </div>
+          <div class="att-right">
+            <div class="att-time">${escHtml(log.time || '—')}</div>
+            <div class="att-meal ${escHtml(log.mealType || '')}">${escHtml(log.mealType || '—')}</div>
+            ${consumed !== null && !isNaN(consumed) ? `<div class="att-balance" style="color:var(--orange)">−₱${consumed.toFixed(2)}</div>` : ''}
+            ${balance  !== null && !isNaN(balance)  ? `<div class="att-balance ${balClass}">₱${balance.toFixed(2)} left</div>` : ''}
+          </div>`;
+        frag.appendChild(row);
+      });
+      list.innerHTML = '';
+      list.appendChild(frag);
+    }
+
+    // ── FLASH ──────────────────────────────────────────────────
+    function showFlash(type, title, sub) {
+      const el = document.getElementById('scan-result-flash');
+      el.removeAttribute('style'); el.className = ''; void el.offsetWidth;
+      const icons = { success: '✅', error: '❌', loading: '⏳', duplicate: '⚠️' };
+      el.querySelector('.flash-icon').textContent         = icons[type] || '•';
+      document.getElementById('flash-title').textContent = title || '';
+      document.getElementById('flash-sub').textContent   = sub   || '';
+      if (type === 'loading') {
+        el.style.cssText = 'display:flex;background:var(--surface2);border:1px solid var(--border);color:var(--text-muted);border-radius:var(--radius);padding:13px 15px;align-items:center;gap:12px;font-size:14px;font-weight:500;';
+      } else {
+        el.className = type;
+        clearTimeout(el._t);
+        el._t = setTimeout(() => { el.className = ''; el.removeAttribute('style'); }, 5000);
+      }
+    }
+
+    // ── INIT ───────────────────────────────────────────────────
+    // Set badge on load without calling cancelPending (state is clean at init)
+    (function initBadge() {
+      const meal  = getCurrentMeal();
+      const icons = { Breakfast: '🍳', Lunch: '🍱' };
+      const badge = document.getElementById('header-meal-badge');
+      badge.textContent   = `${icons[meal] || ''} ${meal}`;
+      badge.style.display = 'block';
+    })();
+
+    window.addEventListener('beforeunload', () => stopScanner());
+    warmEmpCache();
+    loadSessionFeed();
+    startScanner();
+  </script>
+</body>
+</html>

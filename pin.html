@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canteen — Admin Access</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <a class="logo" href="index.html">
+      <div class="logo-icon">🍽</div>
+      <div>
+        <div class="logo-text">Canteen System</div>
+        <div class="logo-sub">Meal Attendance</div>
+      </div>
+    </a>
+  </header>
+
+  <main>
+    <div class="page-wrap">
+      <div class="row-between">
+        <div class="page-title">Admin Access<small>Enter your 4-digit PIN.</small></div>
+        <a class="back-btn" href="index.html">‹ Back</a>
+      </div>
+      <div class="card" style="padding:28px 20px;">
+        <div class="pin-dots">
+          <div class="pin-dot" id="pd0"></div>
+          <div class="pin-dot" id="pd1"></div>
+          <div class="pin-dot" id="pd2"></div>
+          <div class="pin-dot" id="pd3"></div>
+        </div>
+        <p id="pin-error" style="text-align:center;color:var(--red);font-size:12px;min-height:18px;margin:8px 0 16px;"></p>
+        <div class="pin-pad">
+          <button class="pin-key" onclick="pinKey('1')">1</button>
+          <button class="pin-key" onclick="pinKey('2')">2</button>
+          <button class="pin-key" onclick="pinKey('3')">3</button>
+          <button class="pin-key" onclick="pinKey('4')">4</button>
+          <button class="pin-key" onclick="pinKey('5')">5</button>
+          <button class="pin-key" onclick="pinKey('6')">6</button>
+          <button class="pin-key" onclick="pinKey('7')">7</button>
+          <button class="pin-key" onclick="pinKey('8')">8</button>
+          <button class="pin-key" onclick="pinKey('9')">9</button>
+          <button class="pin-key zero" onclick="pinKey('0')">0</button>
+          <button class="pin-key del"  onclick="pinDel()">⌫ Del</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast-container"></div>
+  <script src="shared.js"></script>
+  <script>
+    let pinBuffer = '';
+
+    function pinKey(d) {
+      if (pinBuffer.length >= 4) return;
+      pinBuffer += d; updatePinDots();
+      if (pinBuffer.length === 4) setTimeout(submitPin, 200);
+    }
+    function pinDel() { pinBuffer = pinBuffer.slice(0,-1); updatePinDots(); }
+    function updatePinDots() {
+      for (let i = 0; i < 4; i++)
+        document.getElementById('pd'+i).classList.toggle('filled', i < pinBuffer.length);
+    }
+    async function submitPin() {
+      try {
+        const res  = await fetch(API_URL, {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ action: 'verify_pin', pin: pinBuffer })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+          // Store auth flag in sessionStorage so dashboard can verify
+          sessionStorage.setItem('canteen_auth', '1');
+          window.location.href = 'dashboard.html';
+        } else {
+          document.getElementById('pin-error').textContent = 'Incorrect PIN. Try again.';
+          pinBuffer = ''; updatePinDots();
+        }
+      } catch {
+        document.getElementById('pin-error').textContent = 'Network error.';
+        pinBuffer = ''; updatePinDots();
+      }
+    }
+
+    // Allow keyboard input
+    document.addEventListener('keydown', e => {
+      if (e.key >= '0' && e.key <= '9') pinKey(e.key);
+      if (e.key === 'Backspace') pinDel();
+    });
+  </script>
+</body>
+</html>

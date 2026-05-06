@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canteen — Register Employee</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    /* Loading overlay inside the card */
+    #reg-loading {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 40px 20px;
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 14px; color: var(--text-muted); font-weight: 500; }
+    .loading-sub  { font-size: 12px; color: var(--text-dim); margin-top: -8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="logo" href="index.html">
+      <div class="logo-icon">🍽</div>
+      <div>
+        <div class="logo-text">Canteen System</div>
+        <div class="logo-sub">Meal Attendance</div>
+      </div>
+    </a>
+  </header>
+
+  <main>
+    <div class="page-wrap">
+      <div class="row-between">
+        <div class="page-title">Register Employee<small>Create employee record & generate QR.</small></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <a class="btn btn-ghost btn-sm" href="employees.html">👥 View Employees</a>
+          <a class="back-btn" href="dashboard.html">‹ Back</a>
+        </div>
+      </div>
+
+      <!-- FORM -->
+      <div id="reg-form-wrap" class="card" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="form-group">
+          <label class="form-label">Employee ID</label>
+          <input type="text" id="reg-emp-id" class="form-input" placeholder="e.g. EMP-101" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Full Name</label>
+          <input type="text" id="reg-name" class="form-input" placeholder="Full Name" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Department</label>
+          <select id="reg-dept" class="form-input">
+            <option>Operations(CAH/WTP/OPS)</option><option>FAD/MMD/IT</option>
+            <option>Warehouse</option><option>PMO</option><option>HR/Admin</option>
+            <option>Mechanical(Turbine/Boiler/BOP)</option><option>Engineering</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Employee Type</label>
+          <select id="reg-emp-type" class="form-input">
+            <option value="Regular">Regular Employee — ₱120/day</option>
+            <option value="Housing">Housing Employee — ₱200/day</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" id="reg-submit-btn" onclick="handleRegistration()">
+          Generate &amp; Save Employee
+        </button>
+      </div>
+
+      <!-- LOADING STATE (shown while saving to Google Sheets) -->
+      <div id="reg-loading" class="card">
+        <div class="spinner"></div>
+        <div class="loading-text">Saving to Google Sheets…</div>
+        <div class="loading-sub">This usually takes 3–5 seconds</div>
+      </div>
+
+      <!-- QR RESULT -->
+      <div id="qr-result-wrap" class="card" style="display:none;">
+        <div class="qr-box">
+          <div style="background:#fff;padding:12px;border-radius:10px;border:1px solid var(--border);display:inline-block;">
+            <div id="qrcode-container"></div>
+          </div>
+          <div class="qr-meta">
+            <strong id="qr-emp-id-display"></strong>
+            <span id="qr-emp-name-display"></span>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-ghost" onclick="downloadQR()">💾 Download QR</button>
+          <button class="btn btn-primary" onclick="resetRegistration()">➕ Register New</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="toast-container"></div>
+  <script src="shared.js"></script>
+  <script>
+    async function handleRegistration() {
+      const empId   = document.getElementById('reg-emp-id').value.trim();
+      const name    = document.getElementById('reg-name').value.trim();
+      const dept    = document.getElementById('reg-dept').value;
+      const empType = document.getElementById('reg-emp-type').value;
+
+      if (!empId || !name || !dept) { showToast('Please fill in all fields.', 'error'); return; }
+      if (!/^[A-Za-z0-9_\-]+$/.test(empId)) {
+        showToast('Employee ID: letters, numbers, - and _ only.', 'error'); return;
+      }
+
+      // Show loading, hide form
+      document.getElementById('reg-form-wrap').style.display = 'none';
+      document.getElementById('reg-loading').style.display   = 'flex';
+
+      const amountDay   = EMP_AMOUNTS[empType] || 120;
+      const amountMonth = amountDay * 26;
+      let ok = false;
+
+      try {
+        const res  = await fetch(API_URL, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'register', emp_id: empId, name, dept,
+            qr_raw: empId, emp_type: empType,
+            amount_day: amountDay, amount_month: amountMonth
+          })
+        });
+        const data = await res.json();
+
+        if (data.status === 'duplicate') {
+          // Show form again with error
+          document.getElementById('reg-loading').style.display   = 'none';
+          document.getElementById('reg-form-wrap').style.display = 'flex';
+          showToast('Employee ID already registered.', 'error');
+          return;
+        }
+        if (data.status === 'error') {
+          document.getElementById('reg-loading').style.display   = 'none';
+          document.getElementById('reg-form-wrap').style.display = 'flex';
+          showToast('Server error: ' + (data.message || 'Unknown'), 'error');
+          return;
+        }
+        ok = true;
+        invalidateEmpCache();
+      } catch {
+        // Network failure — still show QR offline
+        showToast('Network error — QR generated offline only.', 'warning');
+      }
+
+      // Hide loading, show QR result
+      document.getElementById('reg-loading').style.display   = 'none';
+      document.getElementById('qr-result-wrap').style.display = 'block';
+      document.getElementById('qr-emp-id-display').textContent   = empId;
+      document.getElementById('qr-emp-name-display').textContent = `${name} · ${dept} · ${empType}`;
+
+      const container = document.getElementById('qrcode-container');
+      container.innerHTML = '';
+      new QRCode(container, {
+        text: empId, width: 200, height: 200,
+        colorDark: '#1a1d2e', colorLight: '#ffffff'
+      });
+
+      showToast(
+        ok ? `${name} registered! (₱${amountDay}/day)` : 'QR ready (offline)',
+        ok ? 'success' : 'warning'
+      );
+    }
+
+    function resetRegistration() {
+      document.getElementById('reg-emp-id').value = '';
+      document.getElementById('reg-name').value   = '';
+      document.getElementById('qr-result-wrap').style.display = 'none';
+      document.getElementById('reg-loading').style.display   = 'none';
+      document.getElementById('reg-form-wrap').style.display = 'flex';
+    }
+
+    function downloadQR() {
+      const canvas = document.querySelector('#qrcode-container canvas');
+      if (!canvas) return;
+      Object.assign(document.createElement('a'), {
+        download: `QR_${document.getElementById('qr-emp-id-display').textContent}.png`,
+        href: canvas.toDataURL()
+      }).click();
+    }
+  </script>
+</body>
+</html>
